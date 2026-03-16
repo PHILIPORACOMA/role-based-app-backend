@@ -1,41 +1,4 @@
-const STORAGE_KEY = 'fpt_demo_v1';
-
-let db = {
-    users: [],
-    employees: [],
-    departments: [],
-    requests: []
-};
 let currentUser = null;
-
-// Load Data on Startup
-function loadFromStorage() {
-    const data = localStorage.getItem(STORAGE_KEY);
-    if (data) {
-        db = JSON.parse(data);
-    } else {
-
-        db.users = [
-            { 
-                firstName: 'Admin', 
-                lastName: 'User', 
-                email: 'admin@example.com', 
-                password: 'Password123!', 
-                role: 'admin', 
-                verified: true 
-            }
-        ];
-        db.departments = [
-            { id: 1, name: 'Engineering', description: 'Software devs' },
-            { id: 2, name: 'HR', description: 'Human Resources' }
-        ];
-        saveToStorage();
-    }
-}
-
-function saveToStorage() {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(db));
-}
 
 // Function: setAuthState(isAuth, user)
 function setAuthState(isAuthenticated, user = null) {
@@ -44,9 +7,7 @@ function setAuthState(isAuthenticated, user = null) {
     
     if (isAuthenticated && user) {
         currentUser = user;
-        localStorage.setItem('auth_token', user.email); 
-        
-        navName.textContent = user.role === 'admin' ? 'Admin' : user.firstName;
+                navName.textContent = user.role === 'admin' ? 'Admin' : user.firstName;
         
         body.classList.remove('not-authenticated');
         body.classList.add('authenticated');
@@ -60,88 +21,119 @@ function setAuthState(isAuthenticated, user = null) {
 
     } else {
         currentUser = null;
-        localStorage.removeItem('auth_token');
-        
-        body.classList.add('not-authenticated');
+                body.classList.add('not-authenticated');
         body.classList.remove('authenticated');
         body.classList.remove('is-admin');
         
         const brand = document.querySelector('.navbar-brand');
         brand.textContent = `Full-Stack App`;
     }
-    
-    handleRouting();
+    // handleRouting() removed — called externally after await checkSession()
 }
 
-function renderRequests() {
+async function renderRequests() {
     const tbody = document.getElementById('requests-table-body');
     const tableContainer = document.getElementById('requests-table-container');
     const emptyState = document.getElementById('requests-empty-state');
-    
     if (!tbody) return;
 
-    // Filtering for the current user
-    const myRequests = db.requests.filter(r => r.employeeEmail === currentUser.email);
-
-    if (myRequests.length === 0) {
-        tableContainer.classList.add('d-none');
-        emptyState.classList.remove('d-none');
-    } else {
-        tableContainer.classList.remove('d-none');
-        emptyState.classList.add('d-none');
-
-        tbody.innerHTML = '';
-        myRequests.forEach(req => {
-            const itemsList = req.items.map(i => `${i.qty}x ${i.name}`).join(', ');
-            
-            // Logic for status badge color
-            let badgeClass = 'bg-warning text-dark';
-            if (req.status === 'Approved') badgeClass = 'bg-success';
-
-            tbody.innerHTML += `
-                <tr>
-                    <td>${req.date}</td>
-                    <td>${req.employeeEmail}</td>
-                    <td><span class="badge bg-info text-dark">${req.type}</span></td>
-                    <td>${itemsList}</td>
-                    <td><span class="badge ${badgeClass}">${req.status}</span></td>
-                    <td>
-                        ${req.status === 'Pending' ? `
-                            <button class="btn btn-sm btn-success me-2" onclick="approveRequest(${req.id})">Approve</button>
-                        ` : ''}
-                        <button class="btn btn-sm btn-danger" onclick="deleteRequest(${req.id})">Delete</button>
-                    </td>
-                </tr>
-            `;
+    try {
+        const response = await fetch('http://localhost:3000/api/requests', {
+            headers: getAuthHeader()
         });
+        if (!response.ok) return;
+        const data = await response.json();
+        const myRequests = data.requests;
+
+        if (myRequests.length === 0) {
+            tableContainer.classList.add('d-none');
+            emptyState.classList.remove('d-none');
+        } else {
+            tableContainer.classList.remove('d-none');
+            emptyState.classList.add('d-none');
+            tbody.innerHTML = '';
+            myRequests.forEach(req => {
+                const itemsList = req.items.map(i => `${i.qty}x ${i.name}`).join(', ');
+                let badgeClass = 'bg-warning text-dark';
+                if (req.status === 'Approved') badgeClass = 'bg-success';
+                tbody.innerHTML += `
+                    <tr>
+                        <td>${req.date}</td>
+                        <td>${req.employeeEmail}</td>
+                        <td><span class="badge bg-info text-dark">${req.type}</span></td>
+                        <td>${itemsList}</td>
+                        <td><span class="badge ${badgeClass}">${req.status}</span></td>
+                        <td>
+                            ${req.status === 'Pending' && currentUser.role === 'admin' ? `
+                                <button class="btn btn-sm btn-success me-2" onclick="approveRequest(${req.id})">Approve</button>
+                            ` : ''}
+                            <button class="btn btn-sm btn-danger" onclick="deleteRequest(${req.id})">Delete</button>
+                        </td>
+                    </tr>
+                `;
+            });
+        }
+    } catch (err) {
+        console.error('Failed to load requests', err);
     }
 }
 
-function approveRequest(id) {
-    const req = db.requests.find(r => r.id === id);
-    if (req) {
-        req.status = 'Approved';
-        saveToStorage();
-        renderRequests();
-        showToast('Request Approved');
+async function approveRequest(id) {
+    try {
+        const response = await fetch(`http://localhost:3000/api/requests/${id}/approve`, {
+            method: 'PUT',
+            headers: getAuthHeader()
+        });
+        if (response.ok) {
+            showToast('Request Approved');
+            renderRequests();
+        }
+    } catch (err) {
+        showToast('Network error', 'error');
     }
 }
 // Logout
 function logout() {
+    sessionStorage.removeItem('authToken'); // ✅ clear the JWT so checkSession won't restore the session
     setAuthState(false);
+    handleRouting(); // ✅ re-route now that currentUser is null
     window.location.hash = '#home';
 }
 
-function checkSession() {
-    const token = localStorage.getItem('auth_token');
+async function checkSession() {
+    const token = sessionStorage.getItem('authToken');
     if (token) {
-        const user = db.users.find(u => u.email === token);
-        if (user) {
-            setAuthState(true, user);
-            return;
+        try {
+            // Send token to backend — let the server verify it
+            const response = await fetch('http://localhost:3000/api/profile', {
+                headers: { Authorization: `Bearer ${token}` }
+            });
+
+            if (response.ok) {
+                const data = await response.json();
+
+                // Build user object from server response
+                const user = {
+                    firstName: data.user.username,
+                    lastName: '',
+                    email: data.user.username,
+                    role: data.user.role,
+                    verified: true
+                };
+                setAuthState(true, user);
+            } else {
+                // Token rejected by server (expired or invalid)
+                sessionStorage.removeItem('authToken');
+                setAuthState(false);
+            }
+        } catch (e) {
+            // Network error — backend might be offline
+            sessionStorage.removeItem('authToken');
+            setAuthState(false);
         }
+    } else {
+        setAuthState(false);
     }
-    setAuthState(false);
 }
 
 function handleRouting() {
@@ -189,9 +181,8 @@ function handleRouting() {
     }
 }
 
-document.addEventListener('DOMContentLoaded', () => {
-    loadFromStorage();
-    checkSession();
+document.addEventListener('DOMContentLoaded', async () => {
+    await checkSession();
     handleRouting();
 
     window.addEventListener('hashchange', handleRouting);
@@ -199,66 +190,72 @@ document.addEventListener('DOMContentLoaded', () => {
     // Registration 
     const regForm = document.getElementById('register-form');
     if (regForm) {
-        regForm.addEventListener('submit', (e) => {
+        regForm.addEventListener('submit', async (e) => {
             e.preventDefault();
             const firstName = document.getElementById('reg-fname').value;
             const lastName = document.getElementById('reg-lname').value;
             const email = document.getElementById('reg-email').value;
             const password = document.getElementById('reg-password').value;
 
-            // Check if email already exists
-            if (db.users.find(u => u.email === email)) {
-                alert('Email already exists!');
-                return;
+            try {
+                const response = await fetch('http://localhost:3000/api/register', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ username: email, password, role: 'user' })
+                });
+
+                const data = await response.json();
+
+                if (response.ok) {
+                    // Store email in sessionStorage for the verify screen
+                    sessionStorage.setItem('unverified_email', email);
+                    document.getElementById('verify-email-display').textContent = email;
+                    regForm.reset();
+                    window.location.hash = '#verify-email';
+                } else {
+                    alert('Registration failed: ' + data.error);
+                }
+            } catch (err) {
+                alert('Network error. Is the backend running on port 3000?');
             }
-
-            // Save new account
-            const newUser = { 
-                firstName, 
-                lastName, 
-                email, 
-                password, 
-                role: 'user', 
-                verified: false 
-            };
-            db.users.push(newUser);
-            saveToStorage();
-
-            // Store for verification screen
-            localStorage.setItem('unverified_email', email);
-            document.getElementById('verify-email-display').textContent = email;
-            
-            // Clear form fields
-            regForm.reset();
-            
-            window.location.hash = '#verify-email';
         });
     }
 
     // Login Submit
     const loginForm = document.getElementById('login-form');
     if (loginForm) {
-        loginForm.addEventListener('submit', (e) => {
+        loginForm.addEventListener('submit', async (e) => {
             e.preventDefault();
-            const email = document.getElementById('login-email').value;
+            const username = document.getElementById('login-email').value;
             const password = document.getElementById('login-password').value;
 
-            const user = db.users.find(u => u.email === email && u.password === password);
+            try {
+                const response = await fetch('http://localhost:3000/api/login', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ username, password })
+                });
 
-            if (!user) {
-                alert('Invalid email or password.');
-                return;
+                const data = await response.json();
+
+                if (response.ok) {
+                    sessionStorage.setItem('authToken', data.token);
+                    // Build a user object compatible with the existing UI
+                    const user = {
+                        firstName: data.user.username,
+                        lastName: '',
+                        email: data.user.username,
+                        role: data.user.role,
+                        verified: true
+                    };
+                    setAuthState(true, user);
+                    window.location.hash = '#profile';
+                } else {
+                    alert('Login failed: ' + data.error);
+                }
+            } catch (err) {
+                alert('Network error. Is the backend running on port 3000?');
             }
-
-            if (!user.verified) {
-                alert('Email not verified.');
-                localStorage.setItem('unverified_email', email);
-                window.location.hash = '#verify-email';
-                return;
-            }
-
-            setAuthState(true, user);
-            window.location.hash = '#profile';
         });
     }
 });
@@ -269,19 +266,16 @@ function prepareVerifyModal() {
 }
 
 function confirmEmailVerification() {
-    const email = localStorage.getItem('unverified_email');
-    const user = db.users.find(u => u.email === email);
-    
-    if (user) {
-        user.verified = true;
-        saveToStorage();
+    const email = sessionStorage.getItem('unverified_email');
+
+    if (email) {
         showToast('Email Verified Successfully!');
-        localStorage.removeItem('unverified_email');
-        
+        sessionStorage.removeItem('unverified_email');
+
         // Close modal
         const modal = bootstrap.Modal.getInstance(document.getElementById('verifyEmailModal'));
         if (modal) modal.hide();
-        
+
         // Redirect to login after short delay
         setTimeout(() => {
             window.location.hash = '#login';
@@ -290,17 +284,15 @@ function confirmEmailVerification() {
 }
 
 function simulateEmailVerification() {
-    const email = localStorage.getItem('unverified_email');
-    const user = db.users.find(u => u.email === email);
-    
-    if (user) {
-        user.verified = true;
-        saveToStorage();
-        alert("Verification Successful! Redirecting to login...");
-        localStorage.removeItem('unverified_email');
+    const email = sessionStorage.getItem('unverified_email');
+
+    if (email) {
+        showToast('Email Verified Successfully!');
+        sessionStorage.removeItem('unverified_email');
         window.location.hash = '#login';
     }
 }
+
 
 // UTILITY: TOASTS 
 function showToast(message, type = 'success') {
@@ -314,25 +306,40 @@ function showToast(message, type = 'success') {
 // Variable to track editing state
 let currentEditingEmail = null;
 
-function renderAccountsList() {
+async function renderAccountsList() {
     const tbody = document.getElementById('accounts-table-body');
     if (!tbody) return;
-    
-    tbody.innerHTML = '';
-    db.users.forEach(u => {
-        tbody.innerHTML += `
-            <tr>
-                <td>${u.firstName} ${u.lastName}</td>
-                <td>${u.email}</td>
-                <td><span class="badge ${u.role === 'admin' ? 'bg-danger' : 'bg-secondary'}">${u.role}</span></td>
-                <td>${u.verified ? '✅' : '❌'}</td>
-                <td>
-                    <button class="btn btn-sm btn-primary" onclick="prepareEditAccount('${u.email}')" data-bs-toggle="modal" data-bs-target="#accountModal">Edit</button>
-                    <button class="btn btn-sm btn-warning" onclick="prepareResetPassword('${u.email}')" data-bs-toggle="modal" data-bs-target="#resetPasswordModal">Reset Password</button>
-                    <button class="btn btn-sm btn-danger" onclick="prepareDeleteAccount('${u.email}')" data-bs-toggle="modal" data-bs-target="#deleteAccountModal">Delete</button>
-                </td>
-            </tr>`;
-    });
+
+    tbody.innerHTML = '<tr><td colspan="5" class="text-center">Loading...</td></tr>';
+
+    try {
+        const response = await fetch('http://localhost:3000/api/users', {
+            headers: getAuthHeader()
+        });
+
+        if (!response.ok) {
+            tbody.innerHTML = '<tr><td colspan="5" class="text-center text-danger">Failed to load users.</td></tr>';
+            return;
+        }
+
+        const data = await response.json();
+        tbody.innerHTML = '';
+
+        data.users.forEach(u => {
+            tbody.innerHTML += `
+                <tr>
+                    <td>${u.username}</td>
+                    <td>${u.username}</td>
+                    <td><span class="badge ${u.role === 'admin' ? 'bg-danger' : 'bg-secondary'}">${u.role}</span></td>
+                    <td><span class="badge bg-success">✅ Verified</span></td>
+                    <td>
+                        <button class="btn btn-sm btn-danger" onclick="prepareDeleteAccount('${u.username}')" data-bs-toggle="modal" data-bs-target="#deleteAccountModal">Delete</button>
+                    </td>
+                </tr>`;
+        });
+    } catch (err) {
+        tbody.innerHTML = '<tr><td colspan="5" class="text-center text-danger">Network error. Is the backend running?</td></tr>';
+    }
 }
 
 function prepareAddAccount() {
@@ -341,68 +348,32 @@ function prepareAddAccount() {
     document.getElementById('acc-email').disabled = false;
 }
 
-function prepareEditAccount(email) {
-    const user = db.users.find(u => u.email === email);
-    if (!user) return;
-    
-    currentEditingEmail = email;
-    
-    document.getElementById('acc-fname').value = user.firstName;
-    document.getElementById('acc-lname').value = user.lastName;
-    document.getElementById('acc-email').value = user.email;
-    document.getElementById('acc-email').disabled = true;
-    document.getElementById('acc-pass').value = '';
-    document.getElementById('acc-role').value = user.role;
-    document.getElementById('acc-verified').checked = user.verified;
+function prepareEditAccount(username) {
+    // Account editing not supported via backend yet — use Register to add users
+    showToast('Use the Register form to add new users', 'error');
 }
 
-function handleAccountSubmit(e) {
+async function handleAccountSubmit(e) {
     e.preventDefault();
-    
-    const firstName = document.getElementById('acc-fname').value;
-    const lastName = document.getElementById('acc-lname').value;
-    const emailInput = document.getElementById('acc-email').value;
-    const passwordInput = document.getElementById('acc-pass').value;
+    const username = document.getElementById('acc-email').value;
+    const password = document.getElementById('acc-pass').value;
     const role = document.getElementById('acc-role').value;
-    const verified = document.getElementById('acc-verified').checked;
-
-    if (currentEditingEmail) {
-        // Edit existing account
-        const user = db.users.find(u => u.email === currentEditingEmail);
-        if (user) {
-            user.firstName = firstName;
-            user.lastName = lastName;
-            user.role = role;
-            user.verified = verified;
-            if (passwordInput) user.password = passwordInput;
-            showToast('Account Updated');
+    try {
+        const response = await fetch('http://localhost:3000/api/register', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', ...getAuthHeader() },
+            body: JSON.stringify({ username, password, role })
+        });
+        const data = await response.json();
+        if (response.ok) {
+            showToast('Account Created');
+            renderAccountsList();
+            const modal = bootstrap.Modal.getInstance(document.getElementById('accountModal'));
+            if (modal) modal.hide();
+        } else {
+            alert(data.error || 'Failed to create account');
         }
-    } else {
-        // Add new account
-        const existingUser = db.users.find(u => u.email === emailInput);
-        if (existingUser) {
-            alert('Email already exists!');
-            return;
-        }
-
-        const newUser = {
-            firstName,
-            lastName,
-            email: emailInput,
-            password: passwordInput || '123456',
-            role,
-            verified
-        };
-        db.users.push(newUser);
-        showToast('Account Created');
-    }
-
-    saveToStorage();
-    renderAccountsList();
-    
-    // Close Modal
-    const modal = bootstrap.Modal.getInstance(document.getElementById('accountModal'));
-    if (modal) modal.hide();
+    } catch (err) { showToast('Network error', 'error'); }
 }
 
 let currentResetEmail = null;
@@ -416,24 +387,8 @@ function prepareResetPassword(email) {
 
 function confirmResetPassword(e) {
     e.preventDefault();
-    
-    if (!currentResetEmail) return;
-    
-    const user = db.users.find(u => u.email === currentResetEmail);
-    if (!user) return;
-    
-    const newPassword = document.getElementById('reset-new-password').value;
-    
-    if (newPassword.trim().length < 6) {
-        alert('Password must be at least 6 characters!');
-        return;
-    }
-    
-    user.password = newPassword;
-    saveToStorage();
-    showToast('Password Reset Successfully');
-    
-    // Close modal
+    // Password reset via backend not yet implemented
+    showToast('Password reset not supported yet', 'error');
     const modal = bootstrap.Modal.getInstance(document.getElementById('resetPasswordModal'));
     if (modal) modal.hide();
 }
@@ -443,14 +398,26 @@ function prepareDeleteAccount(email) {
     document.getElementById('delete-email-display').textContent = email;
 }
 
-function confirmDeleteAccount() {
+async function confirmDeleteAccount() {
     if (!currentDeleteEmail) return;
-    
-    db.users = db.users.filter(u => u.email !== currentDeleteEmail);
-    saveToStorage();
-    renderAccountsList();
-    showToast('Account Deleted');
-    
+
+    try {
+        const response = await fetch(`http://localhost:3000/api/users/${encodeURIComponent(currentDeleteEmail)}`, {
+            method: 'DELETE',
+            headers: getAuthHeader()
+        });
+
+        if (response.ok) {
+            showToast('Account Deleted');
+            renderAccountsList();
+        } else {
+            const data = await response.json();
+            showToast(data.error || 'Failed to delete account', 'error');
+        }
+    } catch (err) {
+        showToast('Network error', 'error');
+    }
+
     // Close modal
     const modal = bootstrap.Modal.getInstance(document.getElementById('deleteAccountModal'));
     if (modal) modal.hide();
@@ -475,45 +442,42 @@ function prepareNewRequest() {
 }
 
 // Function to handle saving a new request
-document.getElementById('request-form').addEventListener('submit', (e) => {
+document.getElementById('request-form').addEventListener('submit', async (e) => {
     e.preventDefault();
-    
-    // Collect item rows from the modal
     const itemRows = document.querySelectorAll('.req-item-row');
     const items = Array.from(itemRows).map(row => ({
         name: row.querySelector('.item-name').value,
         qty: row.querySelector('.item-qty').value
     }));
-
-    if (items.length === 0) {
-        alert("Please add at least one item.");
-        return;
-    }
-
-    // Strictly saving: type, items[], status: "Pending", date, employeeEmail
-    const newRequest = {
-        id: Date.now(), // Unique ID for deletion logic
-        type: document.getElementById('req-type').value,
-        items: items,
-        status: "Pending", // Always starts as Pending
-        date: new Date().toLocaleDateString(),
-        employeeEmail: currentUser.email
-    };
-
-    db.requests.push(newRequest);
-    saveToStorage();
-    renderRequests(); 
-    
-    // Close modal
-    const modal = bootstrap.Modal.getInstance(document.getElementById('requestModal'));
-    modal.hide();
+    if (items.length === 0) { alert("Please add at least one item."); return; }
+    try {
+        const response = await fetch('http://localhost:3000/api/requests', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', ...getAuthHeader() },
+            body: JSON.stringify({
+                type: document.getElementById('req-type').value,
+                items,
+                date: new Date().toLocaleDateString()
+            })
+        });
+        if (response.ok) {
+            showToast('Request Submitted');
+            renderRequests();
+            const modal = bootstrap.Modal.getInstance(document.getElementById('requestModal'));
+            modal.hide();
+        }
+    } catch (err) { showToast('Network error', 'error'); }
 });
 
-function deleteRequest(id) {
+async function deleteRequest(id) {
     if (confirm("Cancel this request?")) {
-        db.requests = db.requests.filter(r => r.id !== id);
-        saveToStorage();
-        renderRequests();
+        try {
+            const response = await fetch(`http://localhost:3000/api/requests/${id}`, {
+                method: 'DELETE',
+                headers: getAuthHeader()
+            });
+            if (response.ok) { renderRequests(); }
+        } catch (err) { showToast('Network error', 'error'); }
     }
 }
 
@@ -521,54 +485,53 @@ function deleteRequest(id) {
 
 let currentEditingEmployeeId = null;
 
-function prepareEmployeeModal() {
+async function prepareEmployeeModal() {
     currentEditingEmployeeId = null;
     document.getElementById('employee-form').reset();
     document.getElementById('emp-id').disabled = false;
-    
-    // Fill User Email dropdown
+    // Fill User Email dropdown from backend
     const userSelect = document.getElementById('emp-user-select');
-    if (userSelect) {
-        userSelect.innerHTML = db.users.map(u => `<option value="${u.email}">${u.email}</option>`).join('');
-    }
-    
-    // Fill Department dropdown
     const deptSelect = document.getElementById('emp-dept-select');
-    if (deptSelect) {
-        deptSelect.innerHTML = db.departments.map(d => `<option value="${d.name}">${d.name}</option>`).join('');
-    }
+    try {
+        const [usersRes, deptsRes] = await Promise.all([
+            fetch('http://localhost:3000/api/users', { headers: getAuthHeader() }),
+            fetch('http://localhost:3000/api/departments', { headers: getAuthHeader() })
+        ]);
+        const usersData = await usersRes.json();
+        const deptsData = await deptsRes.json();
+        if (userSelect) userSelect.innerHTML = usersData.users.map(u => `<option value="${u.username}">${u.username}</option>`).join('');
+        if (deptSelect) deptSelect.innerHTML = deptsData.departments.map(d => `<option value="${d.name}">${d.name}</option>`).join('');
+    } catch (err) { console.error('Failed to load dropdowns', err); }
 }
 
-function prepareEditEmployee(id) {
-    const emp = db.employees.find(e => e.id === id);
-    if (!emp) return;
-    
+async function prepareEditEmployee(id) {
     currentEditingEmployeeId = id;
-    
-    // Fill User Email dropdown
-    const userSelect = document.getElementById('emp-user-select');
-    if (userSelect) {
-        userSelect.innerHTML = db.users.map(u => `<option value="${u.email}" ${u.email === emp.email ? 'selected' : ''}>${u.email}</option>`).join('');
-    }
-    
-    // Fill Department dropdown
-    const deptSelect = document.getElementById('emp-dept-select');
-    if (deptSelect) {
-        deptSelect.innerHTML = db.departments.map(d => `<option value="${d.name}" ${d.name === emp.dept ? 'selected' : ''}>${d.name}</option>`).join('');
-    }
-    
-    // Populate form fields
-    document.getElementById('emp-id').value = emp.id;
-    document.getElementById('emp-id').disabled = true;
-    document.getElementById('emp-user-select').value = emp.email;
-    document.getElementById('emp-position').value = emp.position;
-    document.getElementById('emp-dept-select').value = emp.dept;
-    document.getElementById('emp-date').value = emp.hireDate;
+    try {
+        const [empsRes, usersRes, deptsRes] = await Promise.all([
+            fetch('http://localhost:3000/api/employees', { headers: getAuthHeader() }),
+            fetch('http://localhost:3000/api/users', { headers: getAuthHeader() }),
+            fetch('http://localhost:3000/api/departments', { headers: getAuthHeader() })
+        ]);
+        const empsData = await empsRes.json();
+        const usersData = await usersRes.json();
+        const deptsData = await deptsRes.json();
+        const emp = empsData.employees.find(e => e.id === id);
+        if (!emp) return;
+        const userSelect = document.getElementById('emp-user-select');
+        const deptSelect = document.getElementById('emp-dept-select');
+        if (userSelect) userSelect.innerHTML = usersData.users.map(u => `<option value="${u.username}" ${u.username === emp.email ? 'selected' : ''}>${u.username}</option>`).join('');
+        if (deptSelect) deptSelect.innerHTML = deptsData.departments.map(d => `<option value="${d.name}" ${d.name === emp.dept ? 'selected' : ''}>${d.name}</option>`).join('');
+        document.getElementById('emp-id').value = emp.id;
+        document.getElementById('emp-id').disabled = true;
+        document.getElementById('emp-user-select').value = emp.email;
+        document.getElementById('emp-position').value = emp.position;
+        document.getElementById('emp-dept-select').value = emp.dept;
+        document.getElementById('emp-date').value = emp.hireDate;
+    } catch (err) { console.error('Failed to load employee for edit', err); }
 }
 
-function handleEmployeeSubmit(e) {
+async function handleEmployeeSubmit(e) {
     e.preventDefault();
-    
     const employeeData = {
         id: document.getElementById('emp-id').value,
         email: document.getElementById('emp-user-select').value,
@@ -576,101 +539,99 @@ function handleEmployeeSubmit(e) {
         dept: document.getElementById('emp-dept-select').value,
         hireDate: document.getElementById('emp-date').value
     };
-
-    if (currentEditingEmployeeId) {
-        // Editing existing employee
-        const index = db.employees.findIndex(emp => emp.id === currentEditingEmployeeId);
-        if (index !== -1) {
-            db.employees[index] = employeeData;
-            showToast('Employee Updated');
+    try {
+        const url = currentEditingEmployeeId
+            ? `http://localhost:3000/api/employees/${currentEditingEmployeeId}`
+            : 'http://localhost:3000/api/employees';
+        const method = currentEditingEmployeeId ? 'PUT' : 'POST';
+        const response = await fetch(url, {
+            method,
+            headers: { 'Content-Type': 'application/json', ...getAuthHeader() },
+            body: JSON.stringify(employeeData)
+        });
+        const data = await response.json();
+        if (response.ok) {
+            showToast(currentEditingEmployeeId ? 'Employee Updated' : 'Employee Created');
+            renderEmployeesTable();
+            const modal = bootstrap.Modal.getInstance(document.getElementById('employeeModal'));
+            if (modal) modal.hide();
+        } else {
+            alert(data.error || 'Failed to save employee');
         }
-    } else {
-        // Adding new employee
-        if (db.employees.find(emp => emp.id === employeeData.id)) {
-            alert("Employee ID already exists!");
-            return;
-        }
-        db.employees.push(employeeData);
-        showToast('Employee Created');
-    }
-
-    saveToStorage();
-    renderEmployeesTable();
-    
-    // Close Modal
-    const modal = bootstrap.Modal.getInstance(document.getElementById('employeeModal'));
-    if (modal) modal.hide();
+    } catch (err) { showToast('Network error', 'error'); }
 }
 
-function renderEmployeesTable() {
+async function renderEmployeesTable() {
     const tbody = document.getElementById('employees-table-body');
     if (!tbody) return;
-    
-    tbody.innerHTML = '';
-    db.employees.forEach(emp => {
-        tbody.innerHTML += `
-            <tr>
-                <td>${emp.id}</td>
-                <td>${emp.email}</td>
-                <td>${emp.position}</td>
-                <td>${emp.dept}</td>
-                <td>
-                    <button class="btn btn-sm btn-primary" onclick="prepareEditEmployee('${emp.id}')" data-bs-toggle="modal" data-bs-target="#employeeModal">Edit</button>
-                    <button class="btn btn-sm btn-danger" onclick="prepareDeleteEmployee('${emp.id}')" data-bs-toggle="modal" data-bs-target="#deleteEmployeeModal">Delete</button>
-                </td>
-            </tr>
-        `;
-    });
+    tbody.innerHTML = '<tr><td colspan="5" class="text-center">Loading...</td></tr>';
+    try {
+        const response = await fetch('http://localhost:3000/api/employees', { headers: getAuthHeader() });
+        if (!response.ok) { tbody.innerHTML = '<tr><td colspan="5" class="text-danger text-center">Failed to load employees.</td></tr>'; return; }
+        const data = await response.json();
+        tbody.innerHTML = '';
+        data.employees.forEach(emp => {
+            tbody.innerHTML += `
+                <tr>
+                    <td>${emp.id}</td>
+                    <td>${emp.email}</td>
+                    <td>${emp.position}</td>
+                    <td>${emp.dept}</td>
+                    <td>
+                        <button class="btn btn-sm btn-primary" onclick="prepareEditEmployee('${emp.id}')" data-bs-toggle="modal" data-bs-target="#employeeModal">Edit</button>
+                        <button class="btn btn-sm btn-danger" onclick="prepareDeleteEmployee('${emp.id}')" data-bs-toggle="modal" data-bs-target="#deleteEmployeeModal">Delete</button>
+                    </td>
+                </tr>
+            `;
+        });
+    } catch (err) { tbody.innerHTML = '<tr><td colspan="5" class="text-danger text-center">Network error.</td></tr>'; }
 }
 
 let currentDeleteEmployeeId = null;
 
 function prepareDeleteEmployee(id) {
     currentDeleteEmployeeId = id;
-    const emp = db.employees.find(e => e.id === id);
-    if (emp) {
-        document.getElementById('delete-employee-display').textContent = `${emp.id} (${emp.email})`;
-    }
+    document.getElementById('delete-employee-display').textContent = id;
 }
 
-function confirmDeleteEmployee() {
+async function confirmDeleteEmployee() {
     if (!currentDeleteEmployeeId) return;
-    
-    db.employees = db.employees.filter(emp => emp.id !== currentDeleteEmployeeId);
-    saveToStorage();
-    renderEmployeesTable();
-    showToast('Employee Deleted');
-    
-    // Close modal
+    try {
+        const response = await fetch(`http://localhost:3000/api/employees/${currentDeleteEmployeeId}`, {
+            method: 'DELETE',
+            headers: getAuthHeader()
+        });
+        if (response.ok) {
+            showToast('Employee Deleted');
+            renderEmployeesTable();
+        }
+    } catch (err) { showToast('Network error', 'error'); }
     const modal = bootstrap.Modal.getInstance(document.getElementById('deleteEmployeeModal'));
     if (modal) modal.hide();
 }
 
-function deleteEmployee(id) {
-    if(confirm("Confirm deletion?")) {
-        db.employees = db.employees.filter(emp => emp.id !== id);
-        saveToStorage();
-        renderEmployeesTable();
-    }
-}
-
-function renderDepartmentsTable() {
+async function renderDepartmentsTable() {
     const tbody = document.getElementById('dept-table');
     if (!tbody) return;
-
-    tbody.innerHTML = '';
-    db.departments.forEach(dept => {
-        tbody.innerHTML += `
-            <tr>
-                <td>${dept.name}</td>
-                <td>${dept.description}</td>
-                <td>
-                    <button class="btn btn-sm btn-primary" onclick="prepareEditDepartment(${dept.id})" data-bs-toggle="modal" data-bs-target="#departmentModal">Edit</button>
-                    <button class="btn btn-sm btn-danger" onclick="prepareDeleteDepartment(${dept.id})" data-bs-toggle="modal" data-bs-target="#deleteDepartmentModal">Delete</button>
-                </td>
-            </tr>
-        `;
-    });
+    tbody.innerHTML = '<tr><td colspan="3" class="text-center">Loading...</td></tr>';
+    try {
+        const response = await fetch('http://localhost:3000/api/departments', { headers: getAuthHeader() });
+        if (!response.ok) { tbody.innerHTML = '<tr><td colspan="3" class="text-danger text-center">Failed to load departments.</td></tr>'; return; }
+        const data = await response.json();
+        tbody.innerHTML = '';
+        data.departments.forEach(dept => {
+            tbody.innerHTML += `
+                <tr>
+                    <td>${dept.name}</td>
+                    <td>${dept.description}</td>
+                    <td>
+                        <button class="btn btn-sm btn-primary" onclick="prepareEditDepartment(${dept.id})" data-bs-toggle="modal" data-bs-target="#departmentModal">Edit</button>
+                        <button class="btn btn-sm btn-danger" onclick="prepareDeleteDepartment(${dept.id})" data-bs-toggle="modal" data-bs-target="#deleteDepartmentModal">Delete</button>
+                    </td>
+                </tr>
+            `;
+        });
+    } catch (err) { tbody.innerHTML = '<tr><td colspan="3" class="text-danger text-center">Network error.</td></tr>'; }
 }   
 
 // Department modal-driven CRUD
@@ -683,64 +644,64 @@ function prepareAddDepartment() {
     if (form) form.reset();
 }
 
-function prepareEditDepartment(id) {
+async function prepareEditDepartment(id) {
     currentEditingDepartmentId = id;
-    const dept = db.departments.find(d => d.id === id);
-    if (!dept) return;
-    document.getElementById('dept-name').value = dept.name;
-    document.getElementById('dept-desc').value = dept.description || '';
+    try {
+        const response = await fetch('http://localhost:3000/api/departments', { headers: getAuthHeader() });
+        const data = await response.json();
+        const dept = data.departments.find(d => d.id === id);
+        if (!dept) return;
+        document.getElementById('dept-name').value = dept.name;
+        document.getElementById('dept-desc').value = dept.description || '';
+    } catch (err) { console.error('Failed to load department', err); }
 }
 
-function handleDepartmentSubmit(e) {
+async function handleDepartmentSubmit(e) {
     e.preventDefault();
     const name = document.getElementById('dept-name').value.trim();
     const desc = document.getElementById('dept-desc').value.trim();
-
-    if (!name) {
-        alert('Department name is required');
-        return;
-    }
-
-    if (currentEditingDepartmentId) {
-        const dept = db.departments.find(d => d.id === currentEditingDepartmentId);
-        if (dept) {
-            dept.name = name;
-            dept.description = desc;
-            showToast('Department Updated');
+    if (!name) { alert('Department name is required'); return; }
+    try {
+        const url = currentEditingDepartmentId
+            ? `http://localhost:3000/api/departments/${currentEditingDepartmentId}`
+            : 'http://localhost:3000/api/departments';
+        const method = currentEditingDepartmentId ? 'PUT' : 'POST';
+        const response = await fetch(url, {
+            method,
+            headers: { 'Content-Type': 'application/json', ...getAuthHeader() },
+            body: JSON.stringify({ name, description: desc })
+        });
+        if (response.ok) {
+            showToast(currentEditingDepartmentId ? 'Department Updated' : 'Department Created');
+            renderDepartmentsTable();
+            const modal = bootstrap.Modal.getInstance(document.getElementById('departmentModal'));
+            if (modal) modal.hide();
         }
-    } else {
-        const newDept = {
-            id: Date.now(),
-            name,
-            description: desc
-        };
-        db.departments.push(newDept);
-        showToast('Department Created');
-    }
-
-    saveToStorage();
-    renderDepartmentsTable();
-
-    // Close modal
-    const modal = bootstrap.Modal.getInstance(document.getElementById('departmentModal'));
-    if (modal) modal.hide();
+    } catch (err) { showToast('Network error', 'error'); }
 }
 
-function prepareDeleteDepartment(id) {
+async function prepareDeleteDepartment(id) {
     currentDeleteDepartmentId = id;
-    const dept = db.departments.find(d => d.id === id);
-    if (dept) {
-        document.getElementById('delete-dept-display').textContent = dept.name;
-    }
+    try {
+        const response = await fetch('http://localhost:3000/api/departments', { headers: getAuthHeader() });
+        const data = await response.json();
+        const dept = data.departments.find(d => d.id === id);
+        if (dept) document.getElementById('delete-dept-display').textContent = dept.name;
+    } catch (err) { console.error(err); }
 }
 
-function confirmDeleteDepartment() {
+async function confirmDeleteDepartment() {
     if (!currentDeleteDepartmentId) return;
-    db.departments = db.departments.filter(d => d.id !== currentDeleteDepartmentId);
-    saveToStorage();
-    renderDepartmentsTable();
-    showToast('Department Deleted');
-
+    try {
+        const response = await fetch(`http://localhost:3000/api/departments/${currentDeleteDepartmentId}`, {
+            method: 'DELETE',
+            headers: getAuthHeader()
+        });
+        if (response.ok) {
+            showToast('Department Deleted');
+            renderDepartmentsTable();
+        }
+    } catch (err) { showToast('Network error', 'error'); }
     const modal = bootstrap.Modal.getInstance(document.getElementById('deleteDepartmentModal'));
     if (modal) modal.hide();
 }
